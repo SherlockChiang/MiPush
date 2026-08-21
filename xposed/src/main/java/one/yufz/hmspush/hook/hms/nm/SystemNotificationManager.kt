@@ -6,7 +6,7 @@ import android.os.Build
 import android.service.notification.StatusBarNotification
 import com.huawei.android.app.NotificationManagerEx
 import de.robv.android.xposed.XposedHelpers
-import one.yufz.hmspush.common.ANDROID_PACKAGE_NAME
+import one.yufz.hmspush.common.HMS_PACKAGE_NAME
 import one.yufz.hmspush.hook.XLog
 import one.yufz.xposed.callMethod
 import one.yufz.xposed.callStaticMethod
@@ -42,7 +42,14 @@ object SystemNotificationManager {
 
         //enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id, Notification notification, int userId)
         val methodEnqueueNotificationWithTag = XposedHelpers.findMethodExact(notificationManager.javaClass, "enqueueNotificationWithTag", String::class.java, String::class.java, String::class.java, Int::class.java, Notification::class.java, Int::class.java)
-        val opPkg = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ANDROID_PACKAGE_NAME else packageName
+        // notifyAsPackage()/the public NotificationManager API uses XMSF as
+        // the operation package while the first argument identifies the
+        // target application.  Passing "android" here makes HyperOS/SystemUI
+        // attribute the record to the platform package (and consequently
+        // drops the target's focus payload).  Keep the real XMSF caller
+        // attribution; the system-process permission hook already grants the
+        // bridge access for calls originating from XMSF.
+        val opPkg = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) HMS_PACKAGE_NAME else packageName
         methodEnqueueNotificationWithTag.invoke(notificationManager, packageName, opPkg, tag, id, notification, getUserId())
     }
 
@@ -55,7 +62,7 @@ object SystemNotificationManager {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             //void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id, int userId);
             val methodCancelNotificationWithTag = XposedHelpers.findMethodExact(notificationManager.javaClass, "cancelNotificationWithTag", String::class.java, String::class.java, String::class.java, Int::class.java, Int::class.java)
-            methodCancelNotificationWithTag.invoke(notificationManager, packageName, ANDROID_PACKAGE_NAME, tag, id, getUserId())
+            methodCancelNotificationWithTag.invoke(notificationManager, packageName, HMS_PACKAGE_NAME, tag, id, getUserId())
         } else {
             //  public void cancelNotificationWithTag(String pkg, String tag, int id, int userId)
             val methodCancelNotificationWithTag = XposedHelpers.findMethodExact(notificationManager.javaClass, "cancelNotificationWithTag", String::class.java, String::class.java, Int::class.java, Int::class.java)

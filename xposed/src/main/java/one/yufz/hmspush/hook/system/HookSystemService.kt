@@ -5,7 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.os.Binder
 import de.robv.android.xposed.XposedHelpers
-import one.yufz.hmspush.common.IS_SYSTEM_HOOK_READY
+import one.yufz.hmspush.common.XMSF_FAKE_CONDITION_PROVIDER_PATH
 import one.yufz.hmspush.hook.XLog
 import one.yufz.xposed.callMethod
 import one.yufz.xposed.get
@@ -18,7 +18,7 @@ class HookSystemService {
         val isSystemHookReady: Boolean by lazy {
             try {
                 val nm = AndroidAppHelper.currentApplication().getSystemService(NotificationManager::class.java)
-                nm.callMethod("isSystemConditionProviderEnabled", IS_SYSTEM_HOOK_READY) as Boolean
+                nm.callMethod("isSystemConditionProviderEnabled", XMSF_FAKE_CONDITION_PROVIDER_PATH) as Boolean
             } catch (t: Throwable) {
                 XLog.e(TAG, "isSystemHookReady error", t)
                 false
@@ -59,7 +59,7 @@ class HookSystemService {
     private fun hookSystemReadyFlag(stubClass: Class<Any>) {
         stubClass.hookMethod("isSystemConditionProviderEnabled", String::class.java) {
             doBefore {
-                if (args[0] == IS_SYSTEM_HOOK_READY) {
+                if (args[0] == XMSF_FAKE_CONDITION_PROVIDER_PATH) {
                     result = true
                 }
             }
