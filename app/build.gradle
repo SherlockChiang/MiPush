@@ -1,0 +1,73 @@
+plugins {
+    id 'com.android.application'
+    id 'kotlin-android'
+    id 'kotlin-parcelize'
+}
+
+android {
+    compileSdk COMPILE_SDK
+
+    defaultConfig {
+        applicationId APPLICATION_ID
+        minSdk MIN_SDK
+        targetSdk TARGET_SDK
+        versionCode gitVersionCode
+        versionName gitVersionName
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        archivesBaseName = "${rootProject.name}-v${versionName}-${versionCode}"
+    }
+
+    signingConfigs {
+        release {
+            def locale, keystorePwd, alias, pwd
+            if (project.rootProject.file('local.properties').exists()) {
+                Properties properties = new Properties()
+                properties.load(project.rootProject.file('local.properties').newDataInputStream())
+                locale = properties.getProperty("STORE_FILE_PATH")
+                alias = properties.getProperty("KEY_ALIAS")
+                pwd = properties.getProperty("KEY_PASSWORD")
+                keystorePwd = properties.getProperty("STORE_PASSWORD")
+            }
+            if (locale != null) {
+                storeFile file(locale)
+                storePassword keystorePwd
+                keyAlias alias
+                keyPassword pwd
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            if (signingConfigs.release.storeFile != null &&
+                    signingConfigs.release.storeFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+        release {
+            if (signingConfigs.release.storeFile != null &&
+                    signingConfigs.release.storeFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+}
+dependencies {
+    api project(":common")
+    api project(":xposed")
+
+    //remove this line will cause proguard to remove code from library module
+    compileOnly 'de.robv.android.xposed:api:82'
+}

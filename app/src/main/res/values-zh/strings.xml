@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">MIPush</string>
+    <string name="xposedDescription">让 MiPush 以应用身份发送通知、伪装小米设备</string>
+    <string name="hms_core_not_found">HMS Core 未安装或没有权限访问</string>
+    <string name="hms_not_activated">HMSPush 模块未激活或需要重启 HMS Core</string>
+    <string name="module_not_activated">模块未启用或者需要重启应用</string>
+
+    <string name="menu_launch">启动</string>
+    <string name="menu_app_info">应用信息</string>
+    <string name="menu_search">搜索</string>
+    <string name="menu_unregister">取消注册</string>
+    <string name="menu_settings">设置</string>
+    <string name="reboot_hms_core">重启 HMS Core</string>
+
+    <string name="disable_signature">禁用签名检查</string>
+    <string name="disable_signature_summary">LSPatch 或者修改版应用需要禁用签名检查</string>
+
+    <string name="unregistered">未注册</string>
+    <string name="registered">已注册</string>
+    <string name="latest_push">&#160;&#160;•&#160;&#160;最近推送：%s</string>
+
+    <string name="dialog_confirm_unregister">确定取消注册</string>
+    <string name="dialog_confirm">确定</string>
+    <string name="dialog_cancel">取消</string>
+
+    <string name="keep_history_message">保留历史消息</string>
+    <string name="keep_history_message_summary">一些应用，比如 QQ 默认只显示最新一条消息，开启此开关可保留历史消息</string>
+
+    <string name="notification_icon">自定义通知图标</string>
+    <string name="tint_notification_icon">通知栏图标染色</string>
+    <string name="tint_notification_icon_summary">在某些设备上可能无效果</string>
+    <string name="importing">正在导入…</string>
+    <string name="import_complete">导入完成</string>
+    <string name="import_dialog_title">输入图标库地址</string>
+    <string name="import_from_url">从 URL 导入</string>
+    <string name="clear_icons">清空图标</string>
+</resources>

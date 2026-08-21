@@ -1,0 +1,80 @@
+name: Android CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: set up JDK 11
+      uses: actions/setup-java@v4
+      with:
+        java-version: '11'
+        distribution: 'adopt'
+        cache: gradle
+
+    - name: Write key
+      run: |
+        if [ ! -z "${{ secrets.SIGNING_KEY }}" ]; then
+          echo STORE_PASSWORD='${{ secrets.KEY_STORE_PASSWORD }}' >> local.properties
+          echo KEY_ALIAS='${{ secrets.ALIAS }}' >> local.properties
+          echo KEY_PASSWORD='${{ secrets.KEY_PASSWORD }}' >> local.properties
+          echo STORE_FILE_PATH='../release.keystore' >> local.properties
+          echo ${{ secrets.SIGNING_KEY }} | base64 --decode > release.keystore
+        fi
+
+    - name: Git describe
+      id: ghd
+      uses: proudust/gh-describe@v2.1.0
+      with:
+        exclude: v*-*
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+    - name: Build with Gradle
+      run: ./gradlew --build-cache --parallel --daemon -P versionName=${{ steps.ghd.outputs.describe }} assemble
+
+    - name: Collect artifcat name
+      run: |
+        echo "debug_artifact=$(basename -s .apk app/build/outputs/apk/debug/*.apk)" >> $GITHUB_ENV
+        echo "release_artifact=$(basename -s .apk app/build/outputs/apk/release/*.apk)" >> $GITHUB_ENV
+
+    - name: Upload Debug
+      uses: actions/upload-artifact@v4.6.0
+      with:
+        name: ${{ env.debug_artifact }}
+        path: app/build/outputs/apk/debug/*.apk
+
+    - name: Upload Release
+      uses: actions/upload-artifact@v4.6.0
+      with:
+        name: ${{ env.release_artifact }}
+        path: app/build/outputs/apk/release/*.apk
+
+    - name: Get Version Name
+      id: gvn
+      run: |
+        artifact_name=(app/build/outputs/apk/release/*.apk)
+        version=$(echo $artifact_name | sed 's/.*(v.*)(-[^-]+){2}/\1/' -r)
+        echo "version=$version" >> $GITHUB_OUTPUT
+
+    - name: Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: ${{ steps.gvn.outputs.version }}
+        tag_name: ${{ steps.gvn.outputs.version }}
+        target_commitish: ${{ steps.ghd.outputs.sha }}
+        prerelease: true
+        files: app/build/outputs/apk/*/*.apk
