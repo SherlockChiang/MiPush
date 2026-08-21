@@ -71,13 +71,14 @@ class XposedMod : IXposedHookLoadPackage {
                     pluginLoader
                 )
 
-                XLog.d(tag, "hooking canShowFocus method")
-                classFocusNotifUtils.declaredMethods.find { it.name == "canShowFocus" }!!
-                    .hook {
-                        replace {
-                            true
-                        }
+                val methods = classFocusNotifUtils.declaredMethods
+                    .filter { it.name == "canShowFocus" }
+                methods.forEach { method ->
+                    method.hook {
+                        replace { true }
                     }
+                }
+                XLog.d(tag, "hooked canShowFocus overloads=${methods.size}")
             } catch (e: Throwable) {
                 XLog.e(
                     tag,

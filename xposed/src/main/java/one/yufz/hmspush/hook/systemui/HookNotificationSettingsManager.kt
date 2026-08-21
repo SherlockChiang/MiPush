@@ -18,18 +18,24 @@ class HookNotificationSettingsManager : ISystemUIPluginHooker {
             )
 
             XLog.d(TAG, "hook method")
-            classNotificationSettingsManager.declaredMethods.find { it.name == "canCustomFocus" }!!
-                .hook {
-                    replace {
-                        true
-                    }
+            val customMethods = classNotificationSettingsManager.declaredMethods
+                .filter { it.name == "canCustomFocus" }
+            val showMethods = classNotificationSettingsManager.declaredMethods
+                .filter { it.name == "canShowFocus" }
+            // HyperOS has shipped multiple overloads of these methods. Hook
+            // every overload and tolerate a ROM that omits one of them; a
+            // single missing method must not abort the other focus hooks.
+            customMethods.forEach { method ->
+                method.hook {
+                    replace { true }
                 }
-            classNotificationSettingsManager.declaredMethods.find { it.name == "canShowFocus" }!!
-                .hook {
-                    replace {
-                        true
-                    }
+            }
+            showMethods.forEach { method ->
+                method.hook {
+                    replace { true }
                 }
+            }
+            XLog.d(TAG, "hooked canCustomFocus=${customMethods.size}, canShowFocus=${showMethods.size}")
             XLog.d(TAG, "hook end")
         } catch (e: Throwable) {
             XLog.e(
