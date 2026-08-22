@@ -9,6 +9,7 @@ class HookHMS {
     }
 
     fun hook(lpparam: XC_LoadPackage.LoadPackageParam) {
+        HookHmsNotificationManager.hook()
         if (HookPushNC.canHook(lpparam.classLoader)) {
             HookPushNC.hook(lpparam.classLoader)
         }
