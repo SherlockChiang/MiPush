@@ -10,6 +10,7 @@ import android.os.Process
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedHelpers.findClass
 import de.robv.android.xposed.XposedHelpers.findMethodExact
+import one.yufz.hmspush.common.ANDROID_PACKAGE_NAME
 import one.yufz.hmspush.common.HMS_PACKAGE_NAME
 import one.yufz.hmspush.hook.XLog
 import one.yufz.xposed.HookCallback
@@ -67,11 +68,15 @@ object NmsPermissionHooker {
 
         //void enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id, Notification notification, int userId)
         findMethodExact(classINotificationManager, "enqueueNotificationWithTag", String::class.java, String::class.java, String::class.java, Int::class.java, Notification::class.java, Int::class.java)
-            // Keep the caller-supplied opPkg. SystemNotificationManager
-            // supplies com.xiaomi.xmsf, matching the hidden
-            // NotificationManager.notifyAsPackage contract. Rewriting it to
-            // "android" makes SystemUI lose the target package attribution.
-            .hook(hookPermission(0))
+            // Keep XMSF as opPkg for third-party targets so HyperOS can resolve
+            // their focus renderer. The XMSF self-notification path is a ROM
+            // special case: its system UID rejects an explicit XMSF opPkg, so
+            // preserve the historical platform attribution only for pkg=XMSF.
+            .hook(hookPermission(0) {
+                if (args[0] == HMS_PACKAGE_NAME) {
+                    args[1] = ANDROID_PACKAGE_NAME
+                }
+            })
 
         //void createNotificationChannelsForPackage(String pkg, int uid, in ParceledListSlice channelsList);
         findMethodExact(classINotificationManager, "createNotificationChannelsForPackage", String::class.java, Int::class.java, findClass("android.content.pm.ParceledListSlice", null))
@@ -80,7 +85,11 @@ object NmsPermissionHooker {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             //void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id, int userId);
             findMethodExact(classINotificationManager, "cancelNotificationWithTag", String::class.java, String::class.java, String::class.java, Int::class.java, Int::class.java)
-                .hook(hookPermission(0))
+                .hook(hookPermission(0) {
+                    if (args[0] == HMS_PACKAGE_NAME) {
+                        args[1] = ANDROID_PACKAGE_NAME
+                    }
+                })
         } else {
             //void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id, int userId);
             findMethodExact(classINotificationManager, "cancelNotificationWithTag", String::class.java, String::class.java, Int::class.java, Int::class.java)
