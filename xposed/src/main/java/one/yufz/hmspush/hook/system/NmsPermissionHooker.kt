@@ -17,6 +17,7 @@ import one.yufz.xposed.HookCallback
 import one.yufz.xposed.HookContext
 import one.yufz.xposed.hook
 import one.yufz.xposed.hookMethod
+import java.util.ArrayDeque
 
 object NmsPermissionHooker {
     private const val TAG = "NmsPermissionHooker"
@@ -31,12 +32,32 @@ object NmsPermissionHooker {
 
     private fun getContext(): Context = AndroidAppHelper.currentApplication()
 
+    /**
+     * Binder identity is needed to let XMSF operate on a third-party target,
+     * but it must not be cleared for XMSF's own notifications.  HyperOS
+     * resolves the package UID after the hook and rejects a self notification
+     * when the caller has become system (uid 1000):
+     * "Caller com.xiaomi.xmsf:1000 cannot post for pkg com.xiaomi.xmsf".
+     *
+     * Keep the token per thread so it can be restored after the original
+     * system-server method returns, including when that method throws.
+     */
+    private val clearedIdentities = ThreadLocal.withInitial { ArrayDeque<Long>() }
+
     private fun tryHookPermission(packageName: String): Boolean {
-        if (fromHms()) {
-            Binder.clearCallingIdentity()
-            return true
+        if (!fromHms()) {
+            return false
         }
-        return false
+
+        clearedIdentities.get().addLast(Binder.clearCallingIdentity())
+        return true
+    }
+
+    private fun restoreCallingIdentity() {
+        val identities = clearedIdentities.get()
+        if (identities.isNotEmpty()) {
+            Binder.restoreCallingIdentity(identities.removeLast())
+        }
     }
 
     private fun hookPermission(targetPackageNameParamIndex: Int, hookExtra: (XC_MethodHook.MethodHookParam.() -> Unit)? = null): HookCallback = {
@@ -44,6 +65,9 @@ object NmsPermissionHooker {
             if (tryHookPermission(args[targetPackageNameParamIndex] as String)) {
                 hookExtra?.invoke(this)
             }
+        }
+        doAfter {
+            restoreCallingIdentity()
         }
     }
 
@@ -68,10 +92,10 @@ object NmsPermissionHooker {
 
         //void enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id, Notification notification, int userId)
         findMethodExact(classINotificationManager, "enqueueNotificationWithTag", String::class.java, String::class.java, String::class.java, Int::class.java, Notification::class.java, Int::class.java)
-            // Keep XMSF as opPkg for third-party targets so HyperOS can resolve
-            // their focus renderer. The XMSF self-notification path is a ROM
-            // special case: its system UID rejects an explicit XMSF opPkg, so
-            // preserve the historical platform attribution only for pkg=XMSF.
+            // XMSF's own framework notification must use the platform
+            // operation package while the identity is cleared to system.
+            // Third-party calls retain opPkg=com.xiaomi.xmsf so HyperOS can
+            // resolve the target focus renderer.
             .hook(hookPermission(0) {
                 if (args[0] == HMS_PACKAGE_NAME) {
                     args[1] = ANDROID_PACKAGE_NAME
