@@ -37,9 +37,15 @@ jobs:
 
     - name: Git describe
       id: ghd
-      uses: proudust/gh-describe@v2.1.0
-      with:
-        exclude: v*-*
+      shell: bash
+      run: |
+        # A fork may not have the upstream tags expected by gh-describe.
+        # Keep the build self-contained and always provide the outputs used by
+        # the Gradle and release steps.
+        describe="$(git describe --tags --dirty --exclude='v*-*' 2>/dev/null || git rev-parse --short HEAD)"
+        sha="$(git rev-parse HEAD)"
+        echo "describe=$describe" >> "$GITHUB_OUTPUT"
+        echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
