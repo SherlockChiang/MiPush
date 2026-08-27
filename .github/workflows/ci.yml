@@ -55,6 +55,18 @@ jobs:
     - name: Build with Gradle
       run: ./gradlew --build-cache --no-daemon --max-workers=1 -P versionName=${{ steps.ghd.outputs.describe }} assemble
 
+    - name: Verify project signature
+      if: env.HAS_SIGNING_KEY == 'true'
+      shell: bash
+      run: |
+        apk=(app/build/outputs/apk/release/*.apk)
+        apksigner_path=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+        test -n "$apksigner_path"
+        actual=$("$apksigner_path" verify --print-certs "${apk[0]}" 2>&1 \
+          | awk -F': ' '/certificate SHA-256 digest/ {print $2; exit}' \
+          | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')
+        test "$actual" = "108209e30f644a23f43fe14aaae45f76e0639edaf079a765ff40aa18efcc6b83"
+
     - name: Collect artifcat name
       run: |
         echo "debug_artifact=$(basename -s .apk app/build/outputs/apk/debug/*.apk)" >> $GITHUB_ENV
