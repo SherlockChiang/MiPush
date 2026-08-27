@@ -47,3 +47,12 @@ Do not run `clean` routinely; it removes useful incremental outputs and makes th
 ## Verification
 
 At minimum, report the exact JDK version, Gradle task, result, and APK/AAR path. A failed build caused by toolchain/ACL setup must be reported separately from a source compilation failure.
+
+## Project signing contract
+
+- The LSP module shares the project-owned keystore at `C:\Users\vince\MiPushFramework\.mipush-project.jks`; it is local-only and must never be committed.
+- Never stage or publish `local.properties`, `.mipush-project-signing.env`, the keystore, or any password.
+- Expected certificate SHA-256 fingerprint:
+  `10:82:09:E3:0F:64:4A:23:F4:3F:E1:4A:AA:E4:5F:76:E0:63:9E:DA:F0:79:A7:65:FF:40:AA:18:EF:CC:6B:83`.
+- CI uses the same four repository secrets as MiPushFramework: `MIPUSH_SIGNING_KEY`, `MIPUSH_KEYSTORE_PASSWORD`, `MIPUSH_KEY_ALIAS`, and `MIPUSH_KEY_PASSWORD`.
+- A release artifact is valid only when `apksigner verify --print-certs` reports the expected fingerprint.

@@ -22,13 +22,17 @@ android {
     signingConfigs {
         release {
             def locale, keystorePwd, alias, pwd
+            locale = System.getenv("MIPUSH_KEYSTORE_PATH")
+            alias = System.getenv("MIPUSH_KEY_ALIAS")
+            pwd = System.getenv("MIPUSH_KEY_PASSWORD")
+            keystorePwd = System.getenv("MIPUSH_KEYSTORE_PASSWORD")
             if (project.rootProject.file('local.properties').exists()) {
                 Properties properties = new Properties()
                 properties.load(project.rootProject.file('local.properties').newDataInputStream())
-                locale = properties.getProperty("STORE_FILE_PATH")
-                alias = properties.getProperty("KEY_ALIAS")
-                pwd = properties.getProperty("KEY_PASSWORD")
-                keystorePwd = properties.getProperty("STORE_PASSWORD")
+                locale = locale ?: properties.getProperty("STORE_FILE_PATH")
+                alias = alias ?: properties.getProperty("KEY_ALIAS")
+                pwd = pwd ?: properties.getProperty("KEY_PASSWORD")
+                keystorePwd = keystorePwd ?: properties.getProperty("STORE_PASSWORD")
             }
             if (locale != null) {
                 storeFile file(locale)

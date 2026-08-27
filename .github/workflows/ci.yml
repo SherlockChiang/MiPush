@@ -14,25 +14,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 0
 
-    - name: set up JDK 11
+    - name: set up JDK 17
       uses: actions/setup-java@v4
       with:
-        java-version: '11'
-        distribution: 'adopt'
+        java-version: '17'
+        distribution: 'temurin'
         cache: gradle
 
     - name: Write key
       run: |
-        if [ ! -z "${{ secrets.SIGNING_KEY }}" ]; then
-          echo STORE_PASSWORD='${{ secrets.KEY_STORE_PASSWORD }}' >> local.properties
-          echo KEY_ALIAS='${{ secrets.ALIAS }}' >> local.properties
-          echo KEY_PASSWORD='${{ secrets.KEY_PASSWORD }}' >> local.properties
+        if [ ! -z "${{ secrets.MIPUSH_SIGNING_KEY }}" ]; then
+          echo HAS_SIGNING_KEY=true >> $GITHUB_ENV
+          echo STORE_PASSWORD='${{ secrets.MIPUSH_KEYSTORE_PASSWORD }}' >> local.properties
+          echo KEY_ALIAS='${{ secrets.MIPUSH_KEY_ALIAS }}' >> local.properties
+          echo KEY_PASSWORD='${{ secrets.MIPUSH_KEY_PASSWORD }}' >> local.properties
           echo STORE_FILE_PATH='../release.keystore' >> local.properties
-          echo ${{ secrets.SIGNING_KEY }} | base64 --decode > release.keystore
+          echo ${{ secrets.MIPUSH_SIGNING_KEY }} | base64 --decode > release.keystore
+        else
+          echo HAS_SIGNING_KEY=false >> $GITHUB_ENV
         fi
 
     - name: Git describe
@@ -50,7 +53,7 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
     - name: Build with Gradle
-      run: ./gradlew --build-cache --parallel --daemon -P versionName=${{ steps.ghd.outputs.describe }} assemble
+      run: ./gradlew --build-cache --no-daemon --max-workers=1 -P versionName=${{ steps.ghd.outputs.describe }} assemble
 
     - name: Collect artifcat name
       run: |
@@ -64,12 +67,14 @@ jobs:
         path: app/build/outputs/apk/debug/*.apk
 
     - name: Upload Release
+      if: env.HAS_SIGNING_KEY == 'true'
       uses: actions/upload-artifact@v4.6.0
       with:
         name: ${{ env.release_artifact }}
         path: app/build/outputs/apk/release/*.apk
 
     - name: Get Version Name
+      if: env.HAS_SIGNING_KEY == 'true'
       id: gvn
       run: |
         artifact_name=(app/build/outputs/apk/release/*.apk)
@@ -77,6 +82,10 @@ jobs:
         echo "version=$version" >> $GITHUB_OUTPUT
 
     - name: Release
+      if: >-
+        env.HAS_SIGNING_KEY == 'true' &&
+        env.release_artifact != '' &&
+        steps.gvn.outputs.version != ''
       uses: softprops/action-gh-release@v2
       with:
         name: ${{ steps.gvn.outputs.version }}
