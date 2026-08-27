@@ -9,6 +9,7 @@ import one.yufz.hmspush.common.HMS_PACKAGE_NAME
 import one.yufz.hmspush.common.doOnce
 import one.yufz.hmspush.hook.fakedevice.FakeDevice
 import one.yufz.hmspush.hook.hms.HookHMS
+import one.yufz.hmspush.hook.platform.XiaomiPlatform
 import one.yufz.hmspush.hook.system.HookSystemService
 import one.yufz.hmspush.hook.systemui.HookNotificationSettingsManager
 import one.yufz.hmspush.hook.systemui.HookSystemUIPlugin
@@ -38,7 +39,11 @@ class XposedMod : IXposedHookLoadPackage {
         }
 
         if (lpparam.packageName == "com.android.systemui") {
-            removeHyperOSFocusNotificationPackageLimit(lpparam)
+            if (XiaomiPlatform.isSupported(lpparam.classLoader)) {
+                removeHyperOSFocusNotificationPackageLimit(lpparam)
+            } else {
+                XLog.d(TAG, "skip Xiaomi SystemUI hooks on non-MIUI platform")
+            }
             return
         }
 

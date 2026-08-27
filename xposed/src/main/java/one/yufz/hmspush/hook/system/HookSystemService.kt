@@ -7,6 +7,7 @@ import android.os.Binder
 import de.robv.android.xposed.XposedHelpers
 import one.yufz.hmspush.common.XMSF_FAKE_CONDITION_PROVIDER_PATH
 import one.yufz.hmspush.hook.XLog
+import one.yufz.hmspush.hook.platform.XiaomiPlatform
 import one.yufz.xposed.callMethod
 import one.yufz.xposed.get
 import one.yufz.xposed.hookMethod
@@ -28,6 +29,11 @@ class HookSystemService {
     }
 
     fun hook(classLoader: ClassLoader) {
+        if (!XiaomiPlatform.isSupported(classLoader)) {
+            XLog.d(TAG, "skip system-server notification bridge on non-MIUI platform")
+            return
+        }
+
         val classNotificationManagerService = XposedHelpers.findClass("com.android.server.notification.NotificationManagerService", classLoader)
 
         classNotificationManagerService.hookMethod("onStart") {
