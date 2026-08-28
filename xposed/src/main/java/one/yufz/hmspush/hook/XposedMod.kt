@@ -19,6 +19,8 @@ import one.yufz.xposed.hook
 class XposedMod : IXposedHookLoadPackage {
     companion object {
         private const val TAG = "XposedMod"
+        private const val SYSTEM_SERVER_PROCESS = "system_server"
+        private const val SYSTEM_UI_PROCESS = "com.android.systemui"
     }
 
     @Throws(Throwable::class)
@@ -31,14 +33,20 @@ class XposedMod : IXposedHookLoadPackage {
     private fun hook(lpparam: LoadPackageParam) {
         XLog.d(TAG, "Loaded app: " + lpparam.packageName + " process:" + lpparam.processName)
 
-        if (lpparam.processName == ANDROID_PACKAGE_NAME) {
-            if (lpparam.packageName == ANDROID_PACKAGE_NAME) {
-                HookSystemService().hook(lpparam.classLoader)
-            }
+        // Android 15/16 OEMs commonly expose system_server as the process
+        // name while older/MIUI builds report the android package name. Use
+        // both signals so the Binder bridge is installed on AOSP/Sony too.
+        if (lpparam.packageName == ANDROID_PACKAGE_NAME ||
+            lpparam.processName == ANDROID_PACKAGE_NAME ||
+            lpparam.processName == SYSTEM_SERVER_PROCESS
+        ) {
+            HookSystemService().hook(lpparam.classLoader)
             return
         }
 
-        if (lpparam.packageName == "com.android.systemui") {
+        if (lpparam.packageName == SYSTEM_UI_PROCESS ||
+            lpparam.processName == SYSTEM_UI_PROCESS
+        ) {
             if (XiaomiPlatform.isSupported(lpparam.classLoader)) {
                 removeHyperOSFocusNotificationPackageLimit(lpparam)
             } else {

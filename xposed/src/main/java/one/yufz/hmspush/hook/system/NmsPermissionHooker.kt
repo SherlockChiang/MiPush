@@ -10,59 +10,89 @@ import android.os.Process
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedHelpers.findClass
 import de.robv.android.xposed.XposedHelpers.findMethodExact
-import one.yufz.hmspush.common.ANDROID_PACKAGE_NAME
 import one.yufz.hmspush.common.HMS_PACKAGE_NAME
 import one.yufz.hmspush.hook.XLog
+import one.yufz.hmspush.hook.platform.NotificationBridgePolicy
 import one.yufz.xposed.HookCallback
 import one.yufz.xposed.HookContext
 import one.yufz.xposed.hook
 import one.yufz.xposed.hookMethod
 import java.util.ArrayDeque
 
+/**
+ * Lets XMSF use the system notification service for another package.
+ *
+ * The caller is still XMSF when a hidden NotificationManager method reaches
+ * system_server. Clearing the Binder identity gives the system UID permission
+ * to operate on the target package; the package/opPackage pair is then selected
+ * separately for HyperOS and AOSP/Sony by [NotificationBridgePolicy].
+ */
 object NmsPermissionHooker {
     private const val TAG = "NmsPermissionHooker"
 
-    private fun fromHms() = try {
+    @Volatile
+    private var bridgeActive = false
+
+    private val hookLock = Any()
+    private var hookedStub: Class<*>? = null
+    private var useXiaomiAttribution = false
+
+    /** A frame is pushed for every invocation, including non-XMSF calls. */
+    private data class IdentityFrame(val token: Long?)
+
+    private val clearedIdentities = ThreadLocal.withInitial { ArrayDeque<IdentityFrame>() }
+
+    fun isBridgeActive(): Boolean = bridgeActive
+
+    private fun fromHms(): Boolean = try {
         Binder.getCallingUid() == getPackageUid(HMS_PACKAGE_NAME)
-    } catch (e: Throwable) {
+    } catch (_: Throwable) {
         false
     }
 
-    private fun getPackageUid(packageName: String) = getContext().packageManager.getPackageUid(packageName, 0)
+    private fun getPackageUid(packageName: String): Int =
+        getContext().packageManager.getPackageUid(packageName, 0)
 
     private fun getContext(): Context = AndroidAppHelper.currentApplication()
 
-    /**
-     * Binder identity is needed to let XMSF operate on a third-party target,
-     * but it must not be cleared for XMSF's own notifications.  HyperOS
-     * resolves the package UID after the hook and rejects a self notification
-     * when the caller has become system (uid 1000):
-     * "Caller com.xiaomi.xmsf:1000 cannot post for pkg com.xiaomi.xmsf".
-     *
-     * Keep the token per thread so it can be restored after the original
-     * system-server method returns, including when that method throws.
-     */
-    private val clearedIdentities = ThreadLocal.withInitial { ArrayDeque<Long>() }
-
-    private fun tryHookPermission(packageName: String): Boolean {
-        if (!fromHms()) {
-            return false
+    private fun beginPermission(packageName: String?): Boolean {
+        val token = if (!packageName.isNullOrEmpty() && fromHms()) {
+            try {
+                Binder.clearCallingIdentity()
+            } catch (error: Throwable) {
+                XLog.e(TAG, "clearCallingIdentity failed", error)
+                null
+            }
+        } else {
+            null
         }
-
-        clearedIdentities.get().addLast(Binder.clearCallingIdentity())
-        return true
+        clearedIdentities.get().addLast(IdentityFrame(token))
+        return token != null
     }
 
     private fun restoreCallingIdentity() {
-        val identities = clearedIdentities.get()
-        if (identities.isNotEmpty()) {
-            Binder.restoreCallingIdentity(identities.removeLast())
+        val frames = clearedIdentities.get()
+        if (frames.isEmpty()) return
+        val frame = frames.removeLast()
+        frame.token?.let {
+            try {
+                Binder.restoreCallingIdentity(it)
+            } catch (error: Throwable) {
+                XLog.e(TAG, "restoreCallingIdentity failed", error)
+            }
+        }
+        if (frames.isEmpty()) {
+            clearedIdentities.remove()
         }
     }
 
-    private fun hookPermission(targetPackageNameParamIndex: Int, hookExtra: (XC_MethodHook.MethodHookParam.() -> Unit)? = null): HookCallback = {
+    private fun hookPermission(
+        targetPackageNameParamIndex: Int,
+        hookExtra: (XC_MethodHook.MethodHookParam.() -> Unit)? = null,
+    ): HookCallback = {
         doBefore {
-            if (tryHookPermission(args[targetPackageNameParamIndex] as String)) {
+            val packageName = args.getOrNull(targetPackageNameParamIndex) as? String
+            if (beginPermission(packageName)) {
                 hookExtra?.invoke(this)
             }
         }
@@ -71,115 +101,252 @@ object NmsPermissionHooker {
         }
     }
 
-    fun hook(classINotificationManager: Class<*>) {
-        //boolean areNotificationsEnabledForPackage(String pkg, int uid);
-        findMethodExact(classINotificationManager, "areNotificationsEnabledForPackage", String::class.java, Int::class.java)
-            .hook(hookPermission(0))
+    private fun tryInstall(label: String, install: () -> Unit): Boolean {
+        return try {
+            install()
+            XLog.d(TAG, "hooked $label")
+            true
+        } catch (error: Throwable) {
+            // OEMs frequently remove or rename one of these hidden methods.
+            // A missing optional method must not disable the remaining bridge.
+            XLog.e(TAG, "unable to hook $label", error)
+            false
+        }
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            //NotificationChannel getNotificationChannelForPackage(String pkg, int uid, String channelId, String conversationId, boolean includeDeleted);
-            findMethodExact(classINotificationManager, "getNotificationChannelForPackage", String::class.java, Int::class.java, String::class.java, String::class.java, Boolean::class.java)
-                .hook(hookPermission(0))
-        } else {
-            //NotificationChannel getNotificationChannelForPackage(String pkg, int uid, String channelId, boolean includeDeleted);
-            findMethodExact(classINotificationManager, "getNotificationChannelForPackage", String::class.java, Int::class.java, String::class.java, Boolean::class.java)
-                .hook(hookPermission(0))
+    /**
+     * Install the Binder hooks. Returns true when the enqueue hook, which is
+     * the minimum needed for package attribution, was installed.
+     */
+    fun hook(classINotificationManager: Class<*>, xiaomiAttribution: Boolean = false): Boolean {
+        synchronized(hookLock) {
+            if (hookedStub === classINotificationManager) {
+                return bridgeActive
+            }
+            hookedStub = classINotificationManager
+            useXiaomiAttribution = xiaomiAttribution
+            bridgeActive = false
         }
 
-        //ParceledListSlice getNotificationChannelsForPackage(String pkg, int uid, boolean includeDeleted);
-        findMethodExact(classINotificationManager, "getNotificationChannelsForPackage", String::class.java, Int::class.java, Boolean::class.java)
-            .hook(hookPermission(0))
+        tryInstall("areNotificationsEnabledForPackage") {
+            findMethodExact(
+                classINotificationManager,
+                "areNotificationsEnabledForPackage",
+                String::class.java,
+                Int::class.javaPrimitiveType!!,
+            ).hook(hookPermission(0))
+        }
 
-        //void enqueueNotificationWithTag(String pkg, String opPkg, String tag, int id, Notification notification, int userId)
-        findMethodExact(classINotificationManager, "enqueueNotificationWithTag", String::class.java, String::class.java, String::class.java, Int::class.java, Notification::class.java, Int::class.java)
-            // XMSF's own framework notification must use the platform
-            // operation package while the identity is cleared to system.
-            // Third-party calls retain opPkg=com.xiaomi.xmsf so HyperOS can
-            // resolve the target focus renderer.
-            .hook(hookPermission(0) {
-                if (args[0] == HMS_PACKAGE_NAME) {
-                    args[1] = ANDROID_PACKAGE_NAME
-                }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            tryInstall("getNotificationChannelForPackage(R+)") {
+                findMethodExact(
+                    classINotificationManager,
+                    "getNotificationChannelForPackage",
+                    String::class.java,
+                    Int::class.javaPrimitiveType!!,
+                    String::class.java,
+                    String::class.java,
+                    Boolean::class.javaPrimitiveType!!,
+                ).hook(hookPermission(0))
+            }
+        } else {
+            tryInstall("getNotificationChannelForPackage") {
+                findMethodExact(
+                    classINotificationManager,
+                    "getNotificationChannelForPackage",
+                    String::class.java,
+                    Int::class.javaPrimitiveType!!,
+                    String::class.java,
+                    Boolean::class.javaPrimitiveType!!,
+                ).hook(hookPermission(0))
+            }
+        }
+
+        tryInstall("getNotificationChannelsForPackage") {
+            findMethodExact(
+                classINotificationManager,
+                "getNotificationChannelsForPackage",
+                String::class.java,
+                Int::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+            ).hook(hookPermission(0))
+        }
+
+        val enqueueHooked = tryInstall("enqueueNotificationWithTag") {
+            findMethodExact(
+                classINotificationManager,
+                "enqueueNotificationWithTag",
+                String::class.java,
+                String::class.java,
+                String::class.java,
+                Int::class.javaPrimitiveType!!,
+                Notification::class.java,
+                Int::class.javaPrimitiveType!!,
+            ).hook(hookPermission(0) {
+                val targetPackage = args.getOrNull(0) as? String ?: return@hookPermission
+                // AOSP requires opPkg=android for a system-uid cross-package
+                // call. HyperOS uses XMSF to select its focus renderer.
+                args[1] = NotificationBridgePolicy.operationPackage(
+                    targetPackage,
+                    useXiaomiAttribution,
+                )
             })
+        }
+        bridgeActive = enqueueHooked
 
-        //void createNotificationChannelsForPackage(String pkg, int uid, in ParceledListSlice channelsList);
-        findMethodExact(classINotificationManager, "createNotificationChannelsForPackage", String::class.java, Int::class.java, findClass("android.content.pm.ParceledListSlice", null))
-            .hook(hookPermission(0))
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            //void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id, int userId);
-            findMethodExact(classINotificationManager, "cancelNotificationWithTag", String::class.java, String::class.java, String::class.java, Int::class.java, Int::class.java)
-                .hook(hookPermission(0) {
-                    if (args[0] == HMS_PACKAGE_NAME) {
-                        args[1] = ANDROID_PACKAGE_NAME
-                    }
-                })
-        } else {
-            //void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id, int userId);
-            findMethodExact(classINotificationManager, "cancelNotificationWithTag", String::class.java, String::class.java, Int::class.java, Int::class.java)
-                .hook(hookPermission(0))
+        tryInstall("createNotificationChannelsForPackage") {
+            findMethodExact(
+                classINotificationManager,
+                "createNotificationChannelsForPackage",
+                String::class.java,
+                Int::class.javaPrimitiveType!!,
+                findClass("android.content.pm.ParceledListSlice", null),
+            ).hook(hookPermission(0))
         }
 
-        //void deleteNotificationChannel(String pkg, String channelId);
-        findMethodExact(classINotificationManager, "deleteNotificationChannel", String::class.java, String::class.java)
-            .hook(hookPermission(0))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            tryInstall("cancelNotificationWithTag(R+)") {
+                findMethodExact(
+                    classINotificationManager,
+                    "cancelNotificationWithTag",
+                    String::class.java,
+                    String::class.java,
+                    String::class.java,
+                    Int::class.javaPrimitiveType!!,
+                    Int::class.javaPrimitiveType!!,
+                ).hook(hookPermission(0) {
+                    val targetPackage = args.getOrNull(0) as? String ?: return@hookPermission
+                    args[1] = NotificationBridgePolicy.operationPackage(
+                        targetPackage,
+                        useXiaomiAttribution,
+                    )
+                })
+            }
+        } else {
+            tryInstall("cancelNotificationWithTag") {
+                findMethodExact(
+                    classINotificationManager,
+                    "cancelNotificationWithTag",
+                    String::class.java,
+                    String::class.java,
+                    Int::class.javaPrimitiveType!!,
+                    Int::class.javaPrimitiveType!!,
+                ).hook(hookPermission(0))
+            }
+        }
 
-        //ParceledListSlice getAppActiveNotifications(String callingPkg, int userId);
-        findMethodExact(classINotificationManager, "getAppActiveNotifications", String::class.java, Int::class.java)
-            .hook(hookPermission(0))
+        tryInstall("deleteNotificationChannel") {
+            findMethodExact(
+                classINotificationManager,
+                "deleteNotificationChannel",
+                String::class.java,
+                String::class.java,
+            ).hook(hookPermission(0))
+        }
 
-        //ParceledListSlice getNotificationChannelsForPackage(String pkg, int uid, boolean includeDeleted);
-        findMethodExact(classINotificationManager, "getNotificationChannelsForPackage", String::class.java, Int::class.java, Boolean::class.java)
-            .hook(hookPermission(0))
+        tryInstall("getAppActiveNotifications") {
+            findMethodExact(
+                classINotificationManager,
+                "getAppActiveNotifications",
+                String::class.java,
+                Int::class.javaPrimitiveType!!,
+            ).hook(hookPermission(0))
+        }
 
         val deleteNotificationChannelHook: HookContext.() -> Unit = {
             doBefore {
-                val packageName = args[0] as String
+                val packageName = args.getOrNull(0) as? String ?: return@doBefore
                 if (Binder.getCallingUid() == Process.SYSTEM_UID) {
-                    args[1] = getPackageUid(packageName)
+                    try {
+                        args[1] = getPackageUid(packageName)
+                    } catch (error: Throwable) {
+                        XLog.e(TAG, "unable to resolve channel package uid", error)
+                    }
                 }
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            try {
-                findClass("com.android.server.notification.PreferencesHelper", classINotificationManager.classLoader)
-                    //public boolean deleteNotificationChannel(String pkg, int uid, String channelId, int callingUid, boolean fromSystemOrSystemUi)
-                    .hookMethod(
-                        "deleteNotificationChannel", String::class.java, Int::class.java, String::class.java, Int::class.java, Boolean::class.java,
-                        callback = deleteNotificationChannelHook
-                    )
-            } catch (e: NoSuchMethodError) {
-                //Samsung One UI 7 delete this method
-                XLog.d(TAG, "hook deleteNotificationChannel error, NoSuchMethodError")
+            tryInstall("PreferencesHelper.deleteNotificationChannel(U)") {
+                findClass(
+                    "com.android.server.notification.PreferencesHelper",
+                    classINotificationManager.classLoader,
+                ).hookMethod(
+                    "deleteNotificationChannel",
+                    String::class.java,
+                    Int::class.javaPrimitiveType!!,
+                    String::class.java,
+                    Int::class.javaPrimitiveType!!,
+                    Boolean::class.javaPrimitiveType!!,
+                    callback = deleteNotificationChannelHook,
+                )
             }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            findClass("com.android.server.notification.PreferencesHelper", classINotificationManager.classLoader)
-                //public boolean deleteNotificationChannel(String pkg, int uid, String channelId)
-                .hookMethod("deleteNotificationChannel", String::class.java, Int::class.java, String::class.java,
-                    callback = deleteNotificationChannelHook
+            tryInstall("PreferencesHelper.deleteNotificationChannel") {
+                findClass(
+                    "com.android.server.notification.PreferencesHelper",
+                    classINotificationManager.classLoader,
+                ).hookMethod(
+                    "deleteNotificationChannel",
+                    String::class.java,
+                    Int::class.javaPrimitiveType!!,
+                    String::class.java,
+                    callback = deleteNotificationChannelHook,
                 )
+            }
         } else {
-            findClass("com.android.server.notification.RankingHelper", classINotificationManager.classLoader)
-                //public void deleteNotificationChannel(String pkg, int uid, String channelId)
-                .hookMethod("deleteNotificationChannel", String::class.java, Int::class.java, String::class.java,
-                    callback = deleteNotificationChannelHook
+            tryInstall("RankingHelper.deleteNotificationChannel") {
+                findClass(
+                    "com.android.server.notification.RankingHelper",
+                    classINotificationManager.classLoader,
+                ).hookMethod(
+                    "deleteNotificationChannel",
+                    String::class.java,
+                    Int::class.javaPrimitiveType!!,
+                    String::class.java,
+                    callback = deleteNotificationChannelHook,
                 )
+            }
         }
 
-        //void updateNotificationChannelGroupForPackage(String pkg, int uid, in NotificationChannelGroup group);
-        findMethodExact(classINotificationManager, "updateNotificationChannelGroupForPackage", String::class.java, Int::class.java, NotificationChannelGroup::class.java)
-            .hook(hookPermission(0))
+        tryInstall("updateNotificationChannelGroupForPackage") {
+            findMethodExact(
+                classINotificationManager,
+                "updateNotificationChannelGroupForPackage",
+                String::class.java,
+                Int::class.javaPrimitiveType!!,
+                NotificationChannelGroup::class.java,
+            ).hook(hookPermission(0))
+        }
 
-        //NotificationChannelGroup getNotificationChannelGroupForPackage(String groupId, String pkg, int uid);
-        findMethodExact(classINotificationManager, "getNotificationChannelGroupForPackage", String::class.java, String::class.java, Int::class.java)
-            .hook(hookPermission(1))
+        tryInstall("getNotificationChannelGroupForPackage") {
+            findMethodExact(
+                classINotificationManager,
+                "getNotificationChannelGroupForPackage",
+                String::class.java,
+                String::class.java,
+                Int::class.javaPrimitiveType!!,
+            ).hook(hookPermission(1))
+        }
 
-        //ParceledListSlice getNotificationChannelGroupsForPackage(String pkg, int uid, boolean includeDeleted);
-        findMethodExact(classINotificationManager, "getNotificationChannelGroupsForPackage", String::class.java, Int::class.java, Boolean::class.java)
-            .hook(hookPermission(0))
+        tryInstall("getNotificationChannelGroupsForPackage") {
+            findMethodExact(
+                classINotificationManager,
+                "getNotificationChannelGroupsForPackage",
+                String::class.java,
+                Int::class.javaPrimitiveType!!,
+                Boolean::class.javaPrimitiveType!!,
+            ).hook(hookPermission(0))
+        }
 
-        //void deleteNotificationChannelGroup(String pkg, String channelGroupId);
-        findMethodExact(classINotificationManager, "deleteNotificationChannelGroup", String::class.java, String::class.java)
-            .hook(hookPermission(0))
+        tryInstall("deleteNotificationChannelGroup") {
+            findMethodExact(
+                classINotificationManager,
+                "deleteNotificationChannelGroup",
+                String::class.java,
+                String::class.java,
+            ).hook(hookPermission(0))
+        }
+
+        return bridgeActive
     }
 }

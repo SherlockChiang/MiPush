@@ -1,14 +1,14 @@
 package one.yufz.hmspush.hook.hms.nm
 
 import android.app.*
-import android.os.Binder
 import android.os.Build
 import android.service.notification.StatusBarNotification
-import com.huawei.android.app.NotificationManagerEx
 import de.robv.android.xposed.XposedHelpers
 import one.yufz.hmspush.common.ANDROID_PACKAGE_NAME
 import one.yufz.hmspush.common.HMS_PACKAGE_NAME
 import one.yufz.hmspush.hook.XLog
+import one.yufz.hmspush.hook.platform.NotificationBridgePolicy
+import one.yufz.hmspush.hook.platform.XiaomiPlatform
 import one.yufz.xposed.callMethod
 import one.yufz.xposed.callStaticMethod
 import one.yufz.xposed.setField
@@ -25,7 +25,17 @@ object SystemNotificationManager {
         }
     }
 
-    private val notificationManager: Any = NotificationManager::class.java.callStaticMethod("getService")!!
+    // Delay service lookup until the first bridged call. Some ROMs expose the
+    // NotificationManager facade before the Binder service is ready; eagerly
+    // dereferencing it here used to crash the whole XMSF process.
+    private val notificationManager: Any by lazy {
+        NotificationManager::class.java.callStaticMethod("getService")
+            ?: throw IllegalStateException("NotificationManager service unavailable")
+    }
+
+    private val useXiaomiAttribution: Boolean by lazy {
+        XiaomiPlatform.isSupported(AndroidAppHelper.currentApplication().classLoader)
+    }
 
     private fun getUid(packageName: String): Int {
         return AndroidAppHelper.currentApplication().packageManager.getPackageUid(packageName, 0)
@@ -47,11 +57,10 @@ object SystemNotificationManager {
         // so HyperOS can resolve the target package's focus policy. XMSF's own
         // foreground/status notifications are a ROM special case: this ROM
         // rejects an explicit com.xiaomi.xmsf opPkg for the system UID.
-        val opPkg = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            if (packageName == HMS_PACKAGE_NAME) ANDROID_PACKAGE_NAME else HMS_PACKAGE_NAME
-        } else {
-            packageName
-        }
+        val opPkg = NotificationBridgePolicy.operationPackage(
+            packageName,
+            useXiaomiAttribution,
+        )
         methodEnqueueNotificationWithTag.invoke(notificationManager, packageName, opPkg, tag, id, notification, getUserId())
     }
 
@@ -64,11 +73,10 @@ object SystemNotificationManager {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             //void cancelNotificationWithTag(String pkg, String opPkg, String tag, int id, int userId);
             val methodCancelNotificationWithTag = XposedHelpers.findMethodExact(notificationManager.javaClass, "cancelNotificationWithTag", String::class.java, String::class.java, String::class.java, Int::class.java, Int::class.java)
-            val opPkg = if (packageName == HMS_PACKAGE_NAME) {
-                ANDROID_PACKAGE_NAME
-            } else {
-                HMS_PACKAGE_NAME
-            }
+            val opPkg = NotificationBridgePolicy.operationPackage(
+                packageName,
+                useXiaomiAttribution,
+            )
             methodCancelNotificationWithTag.invoke(notificationManager, packageName, opPkg, tag, id, getUserId())
         } else {
             //  public void cancelNotificationWithTag(String pkg, String tag, int id, int userId)
