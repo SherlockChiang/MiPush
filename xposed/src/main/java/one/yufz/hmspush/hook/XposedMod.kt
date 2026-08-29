@@ -1,9 +1,10 @@
 package one.yufz.hmspush.hook
 
+import android.app.AndroidAppHelper
+import android.os.Process
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam
-import one.yufz.hmspush.common.ANDROID_PACKAGE_NAME
 import one.yufz.hmspush.common.HMS_CORE_PROCESS
 import one.yufz.hmspush.common.HMS_PACKAGE_NAME
 import one.yufz.hmspush.common.doOnce
@@ -19,29 +20,60 @@ import one.yufz.xposed.hook
 class XposedMod : IXposedHookLoadPackage {
     companion object {
         private const val TAG = "XposedMod"
-        private const val SYSTEM_SERVER_PROCESS = "system_server"
         private const val SYSTEM_UI_PROCESS = "com.android.systemui"
     }
 
     @Throws(Throwable::class)
     override fun handleLoadPackage(lpparam: LoadPackageParam) {
         doOnce(lpparam.classLoader) {
-            hook(lpparam)
+            try {
+                hook(lpparam)
+            } catch (error: Throwable) {
+                // A module exception must not escape into system_server (or
+                // an app process) and turn an optional hook into a host crash.
+                XLog.e(
+                    TAG,
+                    "hook failed; skip package=${lpparam.packageName} process=${lpparam.processName}",
+                    error,
+                )
+            }
         }
     }
 
     private fun hook(lpparam: LoadPackageParam) {
-        XLog.d(TAG, "Loaded app: " + lpparam.packageName + " process:" + lpparam.processName)
+        val hostProcessName = currentProcessName()
+        val appUid = lpparam.appInfo?.uid
+        val hostUid = Process.myUid()
+        XLog.d(
+            TAG,
+            "Loaded app: ${lpparam.packageName} process:${lpparam.processName} " +
+                "host:$hostProcessName hostUid:$hostUid appUid:$appUid",
+        )
 
-        // Android 15/16 OEMs commonly expose system_server as the process
-        // name while older/MIUI builds report the android package name. Use
-        // both signals so the Binder bridge is installed on AOSP/Sony too.
-        if (lpparam.packageName == ANDROID_PACKAGE_NAME ||
-            lpparam.processName == ANDROID_PACKAGE_NAME ||
-            lpparam.processName == SYSTEM_SERVER_PROCESS
+        when (
+            LoadPackagePolicy.route(
+                packageName = lpparam.packageName,
+                loadProcessName = lpparam.processName,
+                hostProcessName = hostProcessName,
+                hostUid = hostUid,
+            )
         ) {
-            HookSystemService().hook(lpparam.classLoader)
-            return
+            LoadPackagePolicy.Route.SYSTEM_HOOK -> {
+                HookSystemService().hook(lpparam.classLoader)
+                return
+            }
+
+            LoadPackagePolicy.Route.SYSTEM_SKIP -> {
+                XLog.d(
+                    TAG,
+                    "skip app hooks in system host: package=${lpparam.packageName} " +
+                        "process=${lpparam.processName} host=$hostProcessName " +
+                        "hostUid=$hostUid appUid=$appUid",
+                )
+                return
+            }
+
+            LoadPackagePolicy.Route.APP -> Unit
         }
 
         if (lpparam.packageName == SYSTEM_UI_PROCESS ||
@@ -68,6 +100,14 @@ class XposedMod : IXposedHookLoadPackage {
 //        }
 
         FakeDevice.fake(lpparam)
+    }
+
+    private fun currentProcessName(): String? {
+        return try {
+            AndroidAppHelper.currentProcessName()
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun removeHyperOSFocusNotificationPackageLimit(lpparam: LoadPackageParam) {

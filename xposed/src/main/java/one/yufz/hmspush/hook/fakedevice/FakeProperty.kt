@@ -6,6 +6,7 @@ import one.yufz.xposed.*
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "FakeProperties"
+private const val ANDROID_15_API = 35
 
 enum class Property(val entry: Pair<String, String>) {
     EMUI_API("ro.build.hw_emui_api_level" to ""),
@@ -43,56 +44,133 @@ fun fakeProperty(vararg properties: Property) {
 
 private val propertyMap: MutableMap<String, String> = HashMap()
 private val hooked = AtomicBoolean(false)
+private val buildFieldWriteAvailable = AtomicBoolean(true)
+private val propertyHookLock = Any()
 
 fun fakeProperty(vararg properties: Pair<String, String>) {
     propertyMap.putAll(properties)
 
+    installPropertyHooksOnce()
+
     if (propertyMap.containsKey(Property.BRAND.key)) {
-        Build::class.java["BRAND"] = propertyMap[Property.BRAND.key]
+        setBuildFieldSafely("BRAND", propertyMap[Property.BRAND.key])
     }
 
     if (propertyMap.containsKey(Property.MANUFACTURER.key)) {
-        Build::class.java["MANUFACTURER"] = propertyMap[Property.MANUFACTURER.key]
+        setBuildFieldSafely("MANUFACTURER", propertyMap[Property.MANUFACTURER.key])
     }
 
     if (propertyMap.containsKey("ro.product.model")) {
-        Build::class.java["MODEL"] = propertyMap["ro.product.model"]
+        setBuildFieldSafely("MODEL", propertyMap["ro.product.model"])
     }
 
     if (propertyMap.containsKey("ro.build.display.id")) {
-        Build::class.java["DISPLAY"] = propertyMap["ro.build.display.id"]
+        setBuildFieldSafely("DISPLAY", propertyMap["ro.build.display.id"])
     }
 
     if (propertyMap.containsKey("ro.build.user")) {
-        Build::class.java["USER"] = propertyMap["ro.build.user"]
+        setBuildFieldSafely("USER", propertyMap["ro.build.user"])
     }
+}
 
-    if (hooked.getAndSet(true)) return
+private fun installPropertyHooksOnce() {
+    if (hooked.get()) return
 
-    val classSystemProperties = Build::class.java.classLoader.findClass("android.os.SystemProperties")
+    synchronized(propertyHookLock) {
+        if (hooked.get()) return
 
-    val callback: HookContext.() -> Unit = {
-        doBefore {
-            val key = args[0] as String
-            propertyMap[key]?.let {
-                result = it
-            }
-        }
-    }
+        try {
+            val classSystemProperties =
+                Build::class.java.classLoader.findClass("android.os.SystemProperties")
 
-    classSystemProperties.hookMethod("get", String::class.java, callback = callback)
-    classSystemProperties.hookMethod("get", String::class.java, String::class.java, callback = callback)
-
-    Runtime::class.java.hookMethod("exec", String::class.java) {
-        doBefore {
-            val cmd = args[0] as String
-            if (cmd.startsWith("getprop")) {
-                val key = cmd.removePrefix("getprop").trim()
-                propertyMap[key]?.let {
-                    XLog.d(TAG, "hook getprop $key")
-                    args[0] = "echo $it"
+            val callback: HookContext.() -> Unit = {
+                doBefore {
+                    val key = args[0] as String
+                    propertyMap[key]?.let {
+                        result = it
+                    }
                 }
             }
+
+            var installedAnyHook = false
+
+            try {
+                classSystemProperties.hookMethod("get", String::class.java, callback = callback)
+                installedAnyHook = true
+            } catch (error: Throwable) {
+                XLog.d(TAG, "SystemProperties.get hook unavailable: ${error.message}")
+            }
+
+            try {
+                classSystemProperties.hookMethod(
+                    "get",
+                    String::class.java,
+                    String::class.java,
+                    callback = callback,
+                )
+                installedAnyHook = true
+            } catch (error: Throwable) {
+                XLog.d(TAG, "SystemProperties.get(default) hook unavailable: ${error.message}")
+            }
+
+            try {
+                Runtime::class.java.hookMethod("exec", String::class.java) {
+                    doBefore {
+                        val cmd = args[0] as String
+                        if (cmd.startsWith("getprop")) {
+                            val key = cmd.removePrefix("getprop").trim()
+                            propertyMap[key]?.let {
+                                XLog.d(TAG, "hook getprop $key")
+                                args[0] = "echo $it"
+                            }
+                        }
+                    }
+                }
+                installedAnyHook = true
+            } catch (error: Throwable) {
+                // Runtime.exec is a best-effort shell compatibility hook.
+                XLog.d(TAG, "Runtime.exec hook unavailable: ${error.message}")
+            }
+
+            // Suppress future attempts once at least one compatibility hook
+            // is installed. This prevents duplicate hooks if an optional
+            // method is absent on a vendor build.
+            if (installedAnyHook) hooked.set(true)
+        } catch (error: Throwable) {
+            XLog.d(
+                TAG,
+                "SystemProperties hook unavailable; continue without property override: " +
+                    "${error.javaClass.simpleName}: ${error.message}",
+            )
+        }
+    }
+}
+
+private fun setBuildFieldSafely(fieldName: String, value: String?) {
+    if (!buildFieldWriteAvailable.get()) return
+
+    // ART on Android 15+ rejects reflective writes to these static final
+    // fields. SystemProperties hooks provide the supported compatibility
+    // path without risking the host process.
+    if (Build.VERSION.SDK_INT >= ANDROID_15_API) {
+        if (buildFieldWriteAvailable.compareAndSet(true, false)) {
+            XLog.d(TAG, "skip Build static-final overrides on API ${Build.VERSION.SDK_INT}")
+        }
+        return
+    }
+
+    try {
+        Build::class.java[fieldName] = value
+    } catch (error: Throwable) {
+        // Some older ART builds may also reject writes to
+        // public static final Build fields. SystemProperties hooks remain
+        // useful, so degrade this optional compatibility layer gracefully.
+        if (buildFieldWriteAvailable.compareAndSet(true, false)) {
+            XLog.d(
+                TAG,
+                "Build.$fieldName override unavailable; keep SystemProperties hooks: " +
+                    "${error.javaClass.simpleName}: ${error.message}",
+            )
         }
     }
 }
