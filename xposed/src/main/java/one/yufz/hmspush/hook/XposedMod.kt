@@ -13,6 +13,7 @@ import one.yufz.hmspush.hook.hms.HookHMS
 import one.yufz.hmspush.hook.platform.XiaomiPlatform
 import one.yufz.hmspush.hook.system.HookSystemService
 import one.yufz.hmspush.hook.systemui.HookNotificationSettingsManager
+import one.yufz.hmspush.hook.systemui.HookMessagingNotificationTheme
 import one.yufz.hmspush.hook.systemui.HookSystemUIPlugin
 import one.yufz.xposed.hook
 
@@ -81,6 +82,7 @@ class XposedMod : IXposedHookLoadPackage {
         ) {
             if (XiaomiPlatform.isSupported(lpparam.classLoader)) {
                 removeHyperOSFocusNotificationPackageLimit(lpparam)
+                HookMessagingNotificationTheme().hook(lpparam.classLoader)
             } else {
                 XLog.d(TAG, "skip Xiaomi SystemUI hooks on non-MIUI platform")
             }
