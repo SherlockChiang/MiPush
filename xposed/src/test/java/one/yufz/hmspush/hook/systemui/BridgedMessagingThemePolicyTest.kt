@@ -40,4 +40,20 @@ class BridgedMessagingThemePolicyTest {
         assertFalse(matches(explicitColor = true))
         assertFalse(matches(colorized = true))
     }
+
+    @Test fun compactConversationTemplateIsRecognizedWithoutMessagingGroups() {
+        assertTrue(BridgedMessagingThemePolicy.isCompactMessagingLayout(
+            "com.android.internal.widget.CompactMessagingLayout", "compactMessagingHUN",
+        ))
+    }
+
+    @Test fun otherCompactAndCustomLayoutsAreNotRecolored() {
+        assertFalse(BridgedMessagingThemePolicy.isCompactMessagingLayout(
+            "android.widget.FrameLayout", "compactMessagingHUN",
+        ))
+        assertFalse(BridgedMessagingThemePolicy.isCompactMessagingLayout(
+            "com.android.internal.widget.CompactMessagingLayout", "compactHUN",
+        ))
+        assertFalse(BridgedMessagingThemePolicy.isCompactMessagingLayout(null, null))
+    }
 }

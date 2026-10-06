@@ -6,6 +6,10 @@ import one.yufz.hmspush.common.HMS_PACKAGE_NAME
 object BridgedMessagingThemePolicy {
     private const val MESSAGING_TEMPLATE = "android.app.Notification\$MessagingStyle"
 
+    fun isCompactMessagingLayout(className: String?, tag: String?): Boolean =
+        className == "com.android.internal.widget.CompactMessagingLayout" &&
+                tag == "compactMessagingHUN"
+
     fun shouldNormalize(
         operationPackage: String?,
         targetPackage: String?,
