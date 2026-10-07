@@ -21,6 +21,7 @@ class HookMessagingNotificationTheme {
     private var compatibilityFailureReported = false
     private var remainingBindingLogs = 16
     private var remainingCompactBindingLogs = 16
+    private val frameDiagnostics = MessagingThemeDiagnostics()
 
     fun hook(classLoader: ClassLoader) {
         // HyperOS can bind a compact heads-up separately from the full row.
@@ -54,8 +55,14 @@ class HookMessagingNotificationTheme {
             classLoader,
         )
         if (row != null) {
+            val frameHooks = XposedBridge.hookAllMethods(row, "setHeadsUp",
+                guardedHook { observeHeadsUpFrame(it.thisObject) })
+            XLog.d(TAG, "installed heads-up frame diagnostics hooks=${frameHooks.size}")
             val hooks = XposedBridge.hookAllMethods(row, "onNotificationUpdated",
-                guardedHook { normalizeRow(it.thisObject) })
+                guardedHook {
+                    normalizeRow(it.thisObject)
+                    observeHeadsUpFrame(it.thisObject)
+                })
             if (hooks.isNotEmpty()) {
                 XLog.d(TAG, "installed row binding hooks=${hooks.size}")
                 return
@@ -68,6 +75,17 @@ class HookMessagingNotificationTheme {
         val hooks = XposedBridge.hookAllMethods(wrapper, "onContentUpdated",
             guardedHook { normalize(it.thisObject, it.args.firstOrNull()) })
         XLog.d(TAG, "installed legacy template binding hooks=${hooks.size}")
+    }
+
+    private fun observeHeadsUpFrame(row: Any) {
+        val view = row as? View ?: return
+        val sbn = readNotification(row) ?: return
+        if (!shouldNormalize(sbn)) return
+        frameDiagnostics.observe(view) {
+            val current = readNotification(row)
+            current != null && shouldNormalize(current) &&
+                    XposedHelpers.getBooleanField(row, "mIsHeadsUp")
+        }
     }
 
     private fun guardedHook(callback: (XC_MethodHook.MethodHookParam) -> Unit): XC_MethodHook =
