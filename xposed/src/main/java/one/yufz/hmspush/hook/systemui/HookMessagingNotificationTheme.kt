@@ -20,8 +20,33 @@ import java.util.ArrayDeque
 class HookMessagingNotificationTheme {
     private var compatibilityFailureReported = false
     private var remainingBindingLogs = 16
+    private var remainingCompactBindingLogs = 16
 
     fun hook(classLoader: ClassLoader) {
+        // HyperOS can bind a compact heads-up separately from the full row.
+        // Normalize after its own binding, including subsequent re-applies.
+        val compactWrapper = XposedHelpers.findClassIfExists(
+            "com.android.systemui.statusbar.notification.row.wrapper.NotificationCompactMessagingTemplateViewWrapper",
+            classLoader,
+        )
+        if (compactWrapper != null) {
+            val hooks = XposedBridge.hookAllMethods(compactWrapper, "onContentUpdated",
+                guardedHook { normalize(it.thisObject, it.args.firstOrNull()) })
+            XLog.d(TAG, "installed compact binding hooks=${hooks.size}")
+            val content = XposedHelpers.findClassIfExists(
+                "com.android.systemui.statusbar.notification.row.NotificationContentView",
+                classLoader,
+            )
+            if (content != null) {
+                XposedBridge.hookAllMethods(content, "setHeadsUpChild", guardedHook {
+                    val wrapper = XposedHelpers.getObjectField(it.thisObject, "mHeadsUpWrapper")
+                        ?: return@guardedHook
+                    val row = XposedHelpers.getObjectField(it.thisObject, "mContainingNotification")
+                        ?: return@guardedHook
+                    normalize(wrapper, row)
+                })
+            }
+        }
         // Run after the whole row has bound all three templates and vendor
         // adjustments, rather than depending on an intermediate super call.
         val row = XposedHelpers.findClassIfExists(
@@ -185,8 +210,15 @@ class HookMessagingNotificationTheme {
     private fun hex(color: Int): String = "0x${color.toUInt().toString(16)}"
 
     private fun logBinding(sbn: StatusBarNotification, layout: View, result: String) {
-        if (remainingBindingLogs <= 0) return
-        remainingBindingLogs--
+        if (BridgedMessagingThemePolicy.isCompactMessagingLayout(
+                layout.javaClass.name, layout.tag as? String,
+            )) {
+            if (remainingCompactBindingLogs <= 0) return
+            remainingCompactBindingLogs--
+        } else {
+            if (remainingBindingLogs <= 0) return
+            remainingBindingLogs--
+        }
         XLog.d(TAG, "bound id=${sbn.id} layout=${layout.javaClass.simpleName} $result")
     }
 
