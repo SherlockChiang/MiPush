@@ -15,13 +15,14 @@ import java.util.ArrayDeque
 internal class MessagingThemeDiagnostics {
     private var remainingFrames = 6
 
-    fun observe(row: View, eligible: () -> Boolean) {
+    fun observe(row: View, eligible: () -> Boolean, headsUp: () -> View?) {
         if (remainingFrames <= 0 ||
             XposedHelpers.getAdditionalInstanceField(row, PENDING_FIELD) == true) return
         val pending = PendingFrame(row) {
-            if (remainingFrames > 0 && eligible()) {
+            val root = if (remainingFrames > 0 && eligible()) headsUp() else null
+            if (root != null && root.isShown) {
                 remainingFrames--
-                dump(row)
+                dump(root)
             }
         }
         XposedHelpers.setAdditionalInstanceField(row, PENDING_FIELD, true)
@@ -59,8 +60,9 @@ internal class MessagingThemeDiagnostics {
     }
 
     private fun dump(row: View) {
-        // The traversal is bounded and only happens for six heads-up frames per
-        // SystemUI process. No timers, screenshots, names or message text.
+        // Traverse only the actual heads-up child: walking the whole row used
+        // the budget on hidden shade templates before reaching the message body.
+        // At most six visible observations per process; no timers or message text.
         val pending = ArrayDeque<Pair<View, Int>>()
         pending.add(row to -1)
         var visited = 0

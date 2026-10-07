@@ -2,6 +2,8 @@ package one.yufz.hmspush.hook.systemui
 
 import one.yufz.hmspush.common.HMS_PACKAGE_NAME
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -55,5 +57,25 @@ class BridgedMessagingThemePolicyTest {
             "com.android.internal.widget.CompactMessagingLayout", "compactHUN",
         ))
         assertFalse(BridgedMessagingThemePolicy.isCompactMessagingLayout(null, null))
+    }
+
+    @Test fun onlyPlatformConversationLayoutsUseThePalette() {
+        assertTrue(BridgedMessagingThemePolicy.isMessagingLayout("com.android.internal.widget.ConversationLayout", null))
+        assertTrue(BridgedMessagingThemePolicy.isMessagingLayout("com.android.internal.widget.MessagingLayout", null))
+        assertTrue(BridgedMessagingThemePolicy.isMessagingLayout("com.android.internal.widget.CompactMessagingLayout", "compactMessagingHUN"))
+        assertFalse(BridgedMessagingThemePolicy.isMessagingLayout("android.widget.FrameLayout", "messaging"))
+        assertFalse(BridgedMessagingThemePolicy.isMessagingLayout("com.example.ConversationLayout", null))
+    }
+
+    @Test fun conversationHeaderBodyAndMetadataHaveSeparatePaletteRoles() {
+        val policy = BridgedMessagingThemePolicy
+        assertEquals(BridgedMessagingThemePolicy.TextRole.PRIMARY, policy.textRole("message_name"))
+        assertEquals(BridgedMessagingThemePolicy.TextRole.PRIMARY, policy.textRole("title"))
+        assertEquals(BridgedMessagingThemePolicy.TextRole.SECONDARY, policy.textRole("header_text_secondary"))
+        assertEquals(BridgedMessagingThemePolicy.TextRole.METADATA, policy.textRole("time"))
+        assertEquals(BridgedMessagingThemePolicy.TextRole.METADATA, policy.textRole("time_divider"))
+        assertNull(policy.textRole("remote_input_text"))
+        assertNull(policy.textRole("custom_label"))
+        assertNull(policy.textRole(null))
     }
 }

@@ -10,6 +10,23 @@ object BridgedMessagingThemePolicy {
         className == "com.android.internal.widget.CompactMessagingLayout" &&
                 tag == "compactMessagingHUN"
 
+    fun isMessagingLayout(className: String?, tag: String?): Boolean =
+        className == "com.android.internal.widget.ConversationLayout" ||
+                className == "com.android.internal.widget.MessagingLayout" ||
+                isCompactMessagingLayout(className, tag)
+
+    enum class TextRole { PRIMARY, SECONDARY, METADATA, ACTION }
+
+    fun textRole(resourceName: String?): TextRole? = when (resourceName) {
+        "title", "alt_title", "conversation_text", "message_name" -> TextRole.PRIMARY
+        "text", "header_text", "header_text_secondary" -> TextRole.SECONDARY
+        "app_name_text", "app_name_text_divider", "time", "chronometer", "time_divider",
+        "header_text_divider", "header_text_secondary_divider", "verification_text",
+        "verification_divider", "expand_button_number" -> TextRole.METADATA
+        "action0" -> TextRole.ACTION
+        else -> null
+    }
+
     fun shouldNormalize(
         operationPackage: String?,
         targetPackage: String?,
